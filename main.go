@@ -4,18 +4,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/alecthomas/kong"
+	"github.com/redjax/go-sparseclone/git"
 )
-
-var providerMap = map[string]string{
-	"github":   "github.com",
-	"gitlab":   "gitlab.com",
-	"codeberg": "codeberg.org",
-}
 
 type CLI struct {
 	Provider string   `required:"" long:"provider" help:"Git provider: github, gitlab, codeberg." default:"github"`
@@ -27,21 +21,6 @@ type CLI struct {
 	Protocol string   `long:"protocol" help:"Clone protocol: ssh or https." default:"ssh"`
 }
 
-func buildRepoURL(protocol, host, user, repo string) string {
-	switch protocol {
-	case "ssh":
-		if !strings.HasSuffix(repo, ".git") {
-			repo += ".git"
-		}
-		return fmt.Sprintf("git@%s:%s/%s", host, user, repo)
-	case "https":
-		return fmt.Sprintf("https://%s/%s/%s", host, user, repo)
-	default:
-		log.Fatalf("Unknown protocol: %s", protocol)
-		return ""
-	}
-}
-
 func main() {
 	var cli CLI
 	kong.Parse(&cli,
@@ -49,18 +28,17 @@ func main() {
 		kong.Description("Clone a git repo with sparse checkout in one step."),
 	)
 
-	// Check for git
-	if _, err := exec.LookPath("git"); err != nil {
+	// Check git is installed
+	if !git.CheckGitInstalled() {
 		log.Fatal("git is not installed or not in PATH")
 	}
 
-	// Validate provider
-	host, ok := providerMap[strings.ToLower(cli.Provider)]
-	if !ok {
+	// Validate provider input
+	if !git.ValidateGitProvider(cli.Provider) {
 		log.Fatalf("Unknown provider: %s", cli.Provider)
 	}
 
-	// Determine output directory
+	// Get output directory from repository's name
 	outputDir := cli.Output
 	if outputDir == "" || outputDir == "." {
 		repoName := cli.Repo
@@ -70,19 +48,18 @@ func main() {
 		outputDir = repoName
 	}
 
-	// Compose repo URL
-	repoURL := buildRepoURL(cli.Protocol, host, cli.User, cli.Repo)
-	fmt.Printf("Cloning from %s...\n", repoURL)
+	// Build repo path from provider, protocol, user, and repo
+	host := git.GetHostByProvider(cli.Provider)
+	repoUrl := git.BuildRepoURL(cli.Protocol, host, cli.User, cli.Repo)
 
-	// Step 1: git clone --no-checkout ...
-	cloneCmd := exec.Command("git", "clone", "--no-checkout", repoURL, outputDir)
-	cloneCmd.Stdout, cloneCmd.Stderr = os.Stdout, os.Stderr
-	if err := cloneCmd.Run(); err != nil {
-		log.Fatalf("git clone failed: %v", err)
+	// Clone repo without checking out
+	if !git.GitClone(repoUrl, outputDir) {
+		log.Fatalf("git clone failed")
 	}
 
-	// Step 2: cd <outputDir>
+	// cd <outputDir>
 	absOutputDir, err := filepath.Abs(outputDir)
+	fmt.Printf("Output directory: %v\n", absOutputDir)
 	if err != nil {
 		log.Fatalf("Could not get absolute path: %v", err)
 	}
@@ -93,25 +70,35 @@ func main() {
 		log.Fatalf("Could not enter output dir: %v", err)
 	}
 
-	// Step 3: git sparse-checkout init --cone
-	initCmd := exec.Command("git", "sparse-checkout", "init", "--cone")
-	initCmd.Stdout, initCmd.Stderr = os.Stdout, os.Stderr
-	if err := initCmd.Run(); err != nil {
-		log.Fatalf("git sparse-checkout init failed: %v", err)
+	// git sparse-checkout init --cone
+	// initCmd := exec.Command("git", "sparse-checkout", "init", "--cone")
+	// initCmd.Stdout, initCmd.Stderr = os.Stdout, os.Stderr
+	// if err := initCmd.Run(); err != nil {
+	// 	log.Fatalf("git sparse-checkout init failed: %v", err)
+	// }
+	if !git.GitSparseCheckoutInit() {
+		log.Fatalf("git sparse-checkout init failed")
 	}
 
-	// Step 4: git sparse-checkout set <paths...>
-	setCmd := exec.Command("git", append([]string{"sparse-checkout", "set"}, cli.Paths...)...)
-	setCmd.Stdout, setCmd.Stderr = os.Stdout, os.Stderr
-	if err := setCmd.Run(); err != nil {
-		log.Fatalf("git sparse-checkout set failed: %v", err)
+	// git sparse-checkout set <paths...>
+	// setCmd := exec.Command("git", append([]string{"sparse-checkout", "set"}, cli.Paths...)...)
+	// setCmd.Stdout, setCmd.Stderr = os.Stdout, os.Stderr
+	// if err := setCmd.Run(); err != nil {
+	// 	log.Fatalf("git sparse-checkout set failed: %v", err)
+	// }
+	if !git.GitSparseCheckoutPaths(cli.Paths) {
+		log.Fatalf("git sparse-checkout set failed")
 	}
 
-	// Step 5: git checkout <branch>
-	coCmd := exec.Command("git", "checkout", cli.Branch)
-	coCmd.Stdout, coCmd.Stderr = os.Stdout, os.Stderr
-	if err := coCmd.Run(); err != nil {
-		log.Fatalf("git checkout failed: %v", err)
+	// git checkout <branch>
+	// coCmd := exec.Command("git", "checkout", cli.Branch)
+	// coCmd.Stdout, coCmd.Stderr = os.Stdout, os.Stderr
+	// if err := coCmd.Run(); err != nil {
+	// 	log.Fatalf("git checkout failed: %v", err)
+	// }
+
+	if !git.GitCheckoutBranch(cli.Branch) {
+		log.Fatalf("git checkout failed")
 	}
 
 	fmt.Println("Sparse clone complete!")

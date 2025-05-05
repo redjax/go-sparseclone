@@ -1,4 +1,4 @@
-module sparseclone
+module github.com/redjax/go-sparseclone
 
 go 1.24.1
 
